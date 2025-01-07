@@ -1,0 +1,80 @@
+---
+- name: 部署 Java 应用
+  hosts: "{{ app_host }}"
+  become: yes  # 如果需要使用 sudo 权限
+  vars:
+    app_file: "{{ app_name }}.jar"
+    app_directory: /opt/{{ app_name }}
+    backup_directory: /opt/{{ app_name }}/backup
+    pid_file: "{{ app_directory }}/app.pid"  # 存储进程 ID 的文件
+    max_backups: 5  # 保留的最大备份数量
+    log_file: "{{ app_directory }}/app.log"  # 日志文件路径
+    success_message: "项目启动成功"  # 启动成功的日志消息
+    jvm_options: "-Xms512m -Xmx1024m"  # JVM 参数，可以根据需要修改
+    spring_boot_options: "--spring.profiles.active={{ app_env }} --server.port={{ app_port }}"
+
+  tasks:
+    - name: 停止正在运行的 Java 应用
+      shell: |
+        if [ -f "{{ pid_file }}" ]; then
+            PID=$(cat {{ pid_file }})
+            if ps -p $PID > /dev/null; then
+                kill $PID
+                echo "Old application stopped."
+            else
+                echo "Old application not running."
+            fi
+            rm -f {{ pid_file }}
+        else
+            echo "PID file not found, old application may not be running."
+        fi
+      ignore_errors: yes
+
+    - name: 创建备份目录
+      file:
+        path: "{{ backup_directory }}"
+        state: directory
+
+    - name: 检查旧版本的 JAR 文件是否存在
+      stat:
+        path: "{{ app_directory }}/{{ app_file }}"
+      register: jar_file_stat
+
+    - name: 备份旧版本的 JAR 文件
+      shell: mv {{ app_directory }}/{{ app_file }} {{ backup_directory }}/{{ app_file }}.$(date +%Y%m%d%H%M%S)
+      when: jar_file_stat.stat.exists
+
+    - name: 删除多余的备份
+      shell: |
+        cd {{ backup_directory }} && ls -t | tail -n +{{ max_backups + 1 }} | xargs rm -f
+      when: max_backups > 0
+
+    - name: 创建应用目录
+      file:
+        path: "{{ app_directory }}"
+        state: directory
+
+    - name: 上传新的 JAR 文件
+      copy:
+        src: "{{ local_app_file }}"  # 请替换为本地 JAR 文件路径
+        dest: "{{ app_directory }}/{{ app_file }}"
+
+    - name: 启动 Java 应用
+      shell: "nohup java {{ jvm_options }} -jar {{ app_directory }}/{{ app_file }} {{ spring_boot_options }} > {{ log_file }} 2>&1 & echo $! > {{ pid_file }}"
+      async: 10  # 允许异步执行
+      poll: 0  # 不等待任务完成
+
+    - name: 等待应用启动
+      pause:
+        seconds: 5  # 等待 5 秒以便应用有时间启动
+
+    - name: 检查日志文件以确认应用启动成功
+      shell: grep -q "{{ success_message }}" {{ log_file }}
+      register: log_check
+      retries: 20  # 重试次数
+      delay: 5  # 每次重试的延迟时间（秒）
+      until: log_check.rc == 0  # 直到 grep 返回 0（表示找到匹配）
+
+    - name: 输出应用启动状态
+      debug:
+        msg: "应用已成功启动"
