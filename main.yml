@@ -60,7 +60,10 @@
         dest: "{{ app_directory }}/{{ app_file }}"
 
     - name: 启动 Java 应用
-      shell: "nohup java {{ jvm_options }} -jar {{ app_directory }}/{{ app_file }} {{ spring_boot_options }} > {{ log_file }} 2>&1 & echo $! > {{ pid_file }}"
+      shell: |
+        nohup java {{ jvm_options }} -jar {{ app_directory }}/{{ app_file }} {{ spring_boot_options }} > {{ log_file }} 2>&1 & echo $! > {{ pid_file }}
+      args:
+        chdir: "{{ app_directory }}"
       async: 10  # 允许异步执行
       poll: 0  # 不等待任务完成
 
